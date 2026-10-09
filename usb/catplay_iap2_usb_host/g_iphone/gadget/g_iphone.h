@@ -18,6 +18,7 @@ enum GadgetStatus
 };
 
 struct iphone_hid;
+struct iphone_audio;
 
 struct g_iphone
 {
@@ -25,6 +26,7 @@ struct g_iphone
 
 	int active_config;
 	struct iphone_hid *hid;
+	struct iphone_audio *audio;
 	bool role_switch_requested;
 	enum GadgetStatus status;
 	int (*set_otg_role)(struct g_iphone *iphone_gadget, enum usb_role role);

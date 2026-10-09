@@ -1,7 +1,7 @@
 obj-m := g_iphone.o iap2_char.o iap2_hid.o iap2_usb_bulk.o iap2_scan.o
 
 g_iphone-y := gadget/iphone_mod.o gadget/iphone_dev.o gadget/iphone_rs.o gadget/iphone_class.o \
-	gadget/f_iphone.o gadget/g_iphone_impl.o gadget/libcomposite/composite.o gadget/iphone_hid.o
+	gadget/f_iphone.o gadget/g_iphone_impl.o gadget/libcomposite/composite.o gadget/iphone_hid.o gadget/iphone_audio.o gadget/iphone_endpoint.o
 iap2_char-y := iap2_char/iap2_char_core.o
 iap2_hid-y := iap2_hid/iap2_hid.o iap2_hid/hid_framing.o
 iap2_usb_bulk-y := iap2_usb_bulk/iap2_usb_bulk.o

@@ -2,17 +2,17 @@
 /* g_iphone's UDC adapter; HID report framing lives in iap2_hid. */
 #include "libcomposite/composite.h"
 #include "iphone_hid.h"
+#include "iphone_endpoint.h"
 #include "hid.h"
 #include "../iap2_hid/iap2_hid.h"
 #include "../iap2_hid/hid_framing.h"
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
-#include <linux/ctype.h>
 #include <linux/hid.h>
 #include <linux/printk.h>
 
-#define IPHONE_HID_VERBOSE 0
+#define IPHONE_HID_VERBOSE 1
 
 struct iphone_hid {
     struct usb_function *func;
@@ -208,6 +208,7 @@ int iphone_hid_setup(struct iphone_hid *hid, const struct usb_ctrlrequest *ctrl)
         if (!hid->enabled) goto out;
         switch (ctrl->bRequest) {
         case HID_REQ_SET_REPORT:
+            pr_info("iPhone: HID_REQ_SET_REPORT");
             if ((value >> 8) != 2 || !hid->reports.output[id] ||
                 len != hid->reports.output[id])
                 goto out;
@@ -215,6 +216,7 @@ int iphone_hid_setup(struct iphone_hid *hid, const struct usb_ctrlrequest *ctrl)
             req->length = len;
             break;
         case HID_REQ_SET_IDLE:
+            pr_info("iPhone: HID_REQ_SET_IDLE");
             if (len || (value >> 8) ||
                 (id && !hid->reports.input[id]))
                 goto out;
@@ -229,12 +231,14 @@ int iphone_hid_setup(struct iphone_hid *hid, const struct usb_ctrlrequest *ctrl)
         if (!hid->enabled) goto out;
         switch (ctrl->bRequest) {
         case HID_REQ_GET_REPORT:
+            pr_info("iPhone: HID_REQ_GET_REPORT");
             if ((value >> 8) != 1 || !hid->reports.input[id])
                 goto out;
             req->length = min_t(unsigned int, len, hid->reports.input[id]);
             memcpy(req->buf, hid->last[id], req->length);
             break;
         case HID_REQ_GET_IDLE:
+            pr_info("iPhone: HID_REQ_GET_IDLE");
             if (len != 1)
                 goto out;
             *(u8 *)req->buf = hid->idle_rate;
@@ -248,10 +252,12 @@ int iphone_hid_setup(struct iphone_hid *hid, const struct usb_ctrlrequest *ctrl)
         if (ctrl->bRequest != USB_REQ_GET_DESCRIPTOR) goto out;
         switch (value >> 8) {
         case HID_DT_HID:
+            pr_info("iPhone: magic HID descriptor requested");
             req->length = min_t(unsigned int, len, sizeof(hid_2_2_bin));
             memcpy(req->buf, hid_2_2_bin, req->length);
             break;
         case HID_DT_REPORT:
+            pr_info("iPhone: magic HID report requested");
             req->length = min_t(size_t, len, hid->report_len);
             memcpy(req->buf, hid->report_desc, req->length);
             break;
@@ -324,30 +330,6 @@ void iphone_hid_unbind(struct iphone_hid *hid, int reason)
     kfree(hid);
 }
 
-/* The descriptor layout mirrors an iPhone and is not negotiable. Fixed
- * hardware endpoints must have exactly the requested number; configurable
- * endpoints may adopt that number. Never rewrite the descriptor to fit a UDC.
- */
-static struct usb_ep *claim_fixed_endpoint(struct usb_gadget *gadget,
-                                          const struct usb_endpoint_descriptor *desc)
-{
-    struct usb_ep *ep;
-    list_for_each_entry(ep, &gadget->ep_list, ep_list) {
-        struct usb_endpoint_descriptor candidate = *desc;
-        if (strlen(ep->name) > 2 && isdigit(ep->name[2]) &&
-            simple_strtoul(ep->name + 2, NULL, 10) != usb_endpoint_num(desc))
-            continue;
-        if (!usb_gadget_ep_match_desc(gadget, ep, &candidate, NULL))
-            continue;
-        ep->address = desc->bEndpointAddress;
-        ep->desc = NULL;
-        ep->comp_desc = NULL;
-        ep->claimed = true;
-        return ep;
-    }
-    return NULL;
-}
-
 struct iphone_hid *iphone_hid_bind(struct usb_function *f, const struct usb_endpoint_descriptor *desc, const u8 *report_desc, size_t report_len)
 {
     struct iphone_hid *hid = kzalloc(sizeof(*hid), GFP_KERNEL);
@@ -365,7 +347,7 @@ struct iphone_hid *iphone_hid_bind(struct usb_function *f, const struct usb_endp
     init_waitqueue_head(&hid->idle);
     ret = hid_reports_parse(&hid->reports, config.report_descriptor, config.report_descriptor_len);
     if (ret) goto fail;
-    hid->in = claim_fixed_endpoint(f->config->cdev->gadget, desc);
+    hid->in = iphone_claim_fixed_endpoint(f->config->cdev->gadget, desc);
     if (!hid->in) { ret = -ENODEV; goto fail; }
     for (i = 1; i < 256; i++) {
         size_t len = hid->reports.input[i];
