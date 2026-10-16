@@ -15,6 +15,7 @@ pub(crate) struct KeystreamPrefetch<P: KeystreamProvider> {
     worker: Option<Worker<CoreWorker<P>>>,
     name: &'static str,
     chunk_size: usize,
+    request_alignment: usize,
 }
 
 impl<P: KeystreamProvider> KeystreamPrefetch<P> {
@@ -39,7 +40,17 @@ impl<P: KeystreamProvider> KeystreamPrefetch<P> {
             worker: None,
             name,
             chunk_size,
+            request_alignment: 1,
         }
+    }
+
+    /// Round continuous refill requests up to this many bytes. A small
+    /// capacity overshoot avoids one AES-block request per tiny consumption.
+    pub fn with_request_alignment(mut self, alignment: usize) -> Self {
+        assert!(alignment.is_power_of_two());
+        assert!(self.chunk_size.is_multiple_of(alignment));
+        self.request_alignment = alignment;
+        self
     }
 
     pub fn start_worker(&mut self) -> Result<(), PrefetchStartError> {
@@ -50,6 +61,7 @@ impl<P: KeystreamProvider> KeystreamPrefetch<P> {
                     CoreWorker {
                         shared: Arc::clone(&self.shared),
                         chunk_size: self.chunk_size,
+                        request_alignment: self.request_alignment,
                         provider: None,
                         active_generation: u64::MAX,
                     },

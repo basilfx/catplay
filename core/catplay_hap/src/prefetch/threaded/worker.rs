@@ -7,6 +7,7 @@ use std::sync::Arc;
 pub(super) struct CoreWorker<P: KeystreamProvider> {
     pub(super) shared: Arc<Wake<State<P>>>,
     pub(super) chunk_size: usize,
+    pub(super) request_alignment: usize,
     pub(super) provider: Option<P>,
     pub(super) active_generation: u64,
 }
@@ -36,7 +37,13 @@ impl<P: KeystreamProvider> PollWorker for CoreWorker<P> {
                 Schedule::Finite { .. } => state.scheduled.max(state.consumed),
             };
             let remaining = match state.schedule {
-                Schedule::Continuous { capacity } => capacity.saturating_sub(state.available) as u128,
+                Schedule::Continuous { capacity } => {
+                    // Consumption can leave a one-byte deficit. Refill in
+                    // whole request units instead of issuing an extra AES
+                    // request for a single block.
+                    let deficit = capacity.saturating_sub(state.available) as u128;
+                    deficit.div_ceil(self.request_alignment as u128) * self.request_alignment as u128
+                }
                 Schedule::Finite { target } => (target as u128).saturating_sub(start),
             };
             let len = remaining

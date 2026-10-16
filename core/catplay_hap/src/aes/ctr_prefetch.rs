@@ -217,7 +217,8 @@ impl<B: Aes128CtrEngine> KeystreamProvider for AesProvider<B> {
     }
 }
 
-/// Single-consumer CTR wrapper. The worker fills up to `capacity` useful bytes.
+/// Single-consumer CTR wrapper. The worker targets `capacity` useful bytes;
+/// request rounding can leave up to 31 extra bytes cached.
 pub struct Aes128CtrPrefetch<B: Aes128CtrEngine> {
     inner: KeystreamPrefetch<AesProvider<B>>,
 }
@@ -231,7 +232,8 @@ impl<B: Aes128CtrEngine> Aes128CtrPrefetch<B> {
             0,
             "aes-ctr-prefetch",
             CHUNK_SIZE,
-        );
+        )
+        .with_request_alignment(32);
         inner.start_worker()?;
         Ok(Self { inner })
     }
@@ -360,8 +362,8 @@ mod tests {
         assert_eq!(
             result,
             PrefetchResult {
-                cached_bytes: 31,
-                synchronous_bytes: 16
+                cached_bytes: 32,
+                synchronous_bytes: 15
             }
         );
         assert_eq!(first, expected_first);
@@ -373,6 +375,27 @@ mod tests {
         assert_eq!(prefetch.apply_keystream(&mut second).unwrap().cached_bytes, 13);
         assert_eq!(second, expected_second);
         assert_eq!(prefetch.status().consumed_position, 60);
+    }
+
+    #[test]
+    fn one_consumed_byte_refills_with_a_32_byte_request() {
+        let mut prefetch = Aes128CtrPrefetch::<Aes128CtrSoft>::new([0x31; 16], [0x92; 16], 64).unwrap();
+        wait_for_available(&prefetch, 64);
+        assert_eq!(
+            prefetch
+                .apply_keystream(&mut [0u8; 1])
+                .unwrap()
+                .cached_bytes,
+            1
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while prefetch.status().generated_position < 96 {
+            assert!(Instant::now() < deadline, "prefetch did not refill");
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(prefetch.status().available_bytes, 95);
+        assert_eq!(prefetch.finish_cycle().generated_bytes, 96);
     }
 
     #[test]
@@ -410,8 +433,8 @@ mod tests {
         assert_eq!(
             prefetch.apply_keystream(&mut data).unwrap(),
             PrefetchResult {
-                cached_bytes: 18,
-                synchronous_bytes: 9
+                cached_bytes: 27,
+                synchronous_bytes: 0
             }
         );
         assert_eq!(data, reference);
