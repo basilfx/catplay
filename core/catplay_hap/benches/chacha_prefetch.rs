@@ -18,7 +18,7 @@ enum Mode {
 
 #[cfg(target_os = "linux")]
 fn cpu_seconds() -> f64 {
-    let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut time = libc::timespec::default();
     assert_eq!(unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut time) }, 0);
     time.tv_sec as f64 + time.tv_nsec as f64 * 1e-9
 }

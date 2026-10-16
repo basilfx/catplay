@@ -53,9 +53,9 @@ openssl = ["dep:openssl", "std"]
 # If fast_chacha then fast_chacha for HomeKitCipher, else Ring
 fast_chacha = []
 # Prefer AF_ALG AES-CTR backend when available.
-mips_prefers_af_alg = []
+prefers_af_alg = []
 carplay_pair_setup_cache = []
-default = ["std", "openssl", "mips_prefers_af_alg", "carplay_pair_setup_cache", "fast_chacha"]
+default = ["std", "openssl", "prefers_af_alg", "carplay_pair_setup_cache", "fast_chacha"]
 
 [dev-dependencies]
 criterion = { version = "0.8.1", default-features = false, features = [

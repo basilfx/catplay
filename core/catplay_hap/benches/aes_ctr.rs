@@ -321,7 +321,8 @@ fn aes_ctr_throughput(c: &mut Criterion) {
     });
 
     group.bench_function("kernel", |b| {
-        let mut cipher = Aes128CtrKernelStream::new(&KEY, &IV).expect("AF_ALG ctr(aes) init failed");
+        let mut cipher = Aes128CtrKernelStream::new(&KEY, &IV)
+            .expect("AF_ALG ctr(aes) init failed");
         let mut data = vec![0x11u8; BUFFER_LEN];
 
         b.iter(|| {

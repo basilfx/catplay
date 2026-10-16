@@ -34,6 +34,81 @@ pub trait Aes128CtrEngine: Send + 'static {
     fn apply_keystream(&mut self, data: &mut [u8]) -> Result<(), Self::Error>;
 }
 
+/// Runtime-selected AES-CTR provider. AF_ALG is used only for approved DTs.
+pub enum Aes128CtrBackend {
+    #[cfg(feature = "prefers_af_alg")]
+    Kernel(Aes128CtrKernelStream),
+    #[cfg(feature = "openssl")]
+    OpenSsl(Aes128CtrOpenSsl),
+    Soft(Aes128CtrSoft),
+}
+
+#[derive(Debug)]
+pub enum Aes128CtrBackendError {
+    #[cfg(feature = "prefers_af_alg")]
+    Kernel(AfAlgError),
+}
+
+impl Aes128CtrEngine for Aes128CtrBackend {
+    type Error = Aes128CtrBackendError;
+
+    fn new(key: &[u8; 16], iv: &[u8; 16]) -> Result<Self, Self::Error> {
+        #[cfg(feature = "prefers_af_alg")]
+        if super::ctr_kernel::device_tree_allows_af_alg() {
+            return Aes128CtrKernelStream::new(key, iv)
+                .map(Self::Kernel)
+                .map_err(Aes128CtrBackendError::Kernel);
+        }
+
+        #[cfg(feature = "openssl")]
+        {
+            Ok(Self::OpenSsl(Aes128CtrOpenSsl::new(key, iv)))
+        }
+        #[cfg(not(feature = "openssl"))]
+        {
+            Ok(Self::Soft(Aes128CtrSoft::new(key, iv)))
+        }
+    }
+
+    fn generate_keystream(&mut self, out: &mut [u8]) -> Result<(), Self::Error> {
+        match self {
+            #[cfg(feature = "prefers_af_alg")]
+            Self::Kernel(engine) => engine
+                .generate_keystream(out)
+                .map_err(Aes128CtrBackendError::Kernel),
+            #[cfg(feature = "openssl")]
+            Self::OpenSsl(engine) => {
+                out.fill(0);
+                engine.apply_keystream(out);
+                Ok(())
+            }
+            Self::Soft(engine) => {
+                out.fill(0);
+                engine.apply_keystream(out);
+                Ok(())
+            }
+        }
+    }
+
+    fn apply_keystream(&mut self, data: &mut [u8]) -> Result<(), Self::Error> {
+        match self {
+            #[cfg(feature = "prefers_af_alg")]
+            Self::Kernel(engine) => engine
+                .apply_keystream(data)
+                .map_err(Aes128CtrBackendError::Kernel),
+            #[cfg(feature = "openssl")]
+            Self::OpenSsl(engine) => {
+                engine.apply_keystream(data);
+                Ok(())
+            }
+            Self::Soft(engine) => {
+                engine.apply_keystream(data);
+                Ok(())
+            }
+        }
+    }
+}
+
 impl Aes128CtrEngine for Aes128CtrKernelStream {
     type Error = AfAlgError;
 

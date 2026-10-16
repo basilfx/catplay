@@ -21,7 +21,7 @@ const DEFAULT_FRAMES: usize = 40;
 struct Outcome {
     latencies: Vec<Duration>,
     cached_bytes: usize,
-    frame_bytes: usize,
+    total_bytes: usize,
     last_frame: Vec<u8>,
 }
 
@@ -33,7 +33,14 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn run<B: Aes128CtrEngine>(enabled: bool, cadence: Duration, frame_bytes: usize, capacity: usize, frames: usize) -> Outcome
+fn run<B: Aes128CtrEngine>(
+    enabled: bool,
+    cadence: Duration,
+    frame_bytes: usize,
+    capacity: usize,
+    frames: usize,
+    random_frames: bool,
+) -> Outcome
 where
     B::Error: Debug,
 {
@@ -41,29 +48,45 @@ where
     let mut direct = (!enabled).then(|| B::new(&KEY, &IV).expect("initialize CTR engine"));
     let mut latencies = Vec::with_capacity(frames);
     let mut cached_bytes = 0;
-    let mut frame = vec![0u8; frame_bytes];
+    let mut total_bytes = 0;
+    let mut frame = vec![0u8; frame_bytes.saturating_mul(3) / 2 + 16];
+    let mut last_frame = Vec::new();
+    let mut rng = 0x9e37_79b9_u32;
     let mut next_frame = Instant::now() + cadence;
 
     for _ in 0..frames {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        let length = if random_frames {
+            frame_bytes / 2 + (rng as usize % frame_bytes)
+        } else {
+            frame_bytes
+        };
+        let offset = if random_frames { ((rng >> 16) as usize) & 15 } else { 0 };
         let now = Instant::now();
         if now < next_frame {
             thread::sleep(next_frame - now);
         }
-        frame.fill(0x5a);
+        let data = &mut frame[offset..offset + length];
+        data.fill(0x5a);
         let start = Instant::now();
         if let Some(prefetch) = prefetch.as_mut() {
             let result = prefetch
-                .apply_keystream(black_box(&mut frame))
+                .apply_keystream(black_box(&mut *data))
                 .expect("prefetched CTR frame");
             cached_bytes += result.cached_bytes;
         } else {
             direct
                 .as_mut()
                 .unwrap()
-                .apply_keystream(black_box(&mut frame))
+                .apply_keystream(black_box(&mut *data))
                 .expect("direct CTR frame");
         }
         latencies.push(start.elapsed());
+        total_bytes += length;
+        last_frame.clear();
+        last_frame.extend_from_slice(data);
         next_frame += cadence;
     }
 
@@ -72,8 +95,8 @@ where
     Outcome {
         latencies,
         cached_bytes,
-        frame_bytes,
-        last_frame: frame,
+        total_bytes,
+        last_frame,
     }
 }
 
@@ -87,7 +110,7 @@ fn print_result(prefetch: bool, prefer_keystream_generation: bool, cadence_ms: u
     let mean = samples.iter().sum::<f64>() / samples.len() as f64;
     let median = samples[samples.len() / 2];
     let p95 = samples[((samples.len() * 95).div_ceil(100)).saturating_sub(1)];
-    let hit = 100.0 * outcome.cached_bytes as f64 / (outcome.frame_bytes * samples.len()) as f64;
+    let hit = 100.0 * outcome.cached_bytes as f64 / outcome.total_bytes as f64;
     println!(
         "prefetch={} prefer_keystream_generation={} {cadence_ms:>2} ms  mean={mean:>8.3} ms  median={median:>8.3} ms  p95={p95:>8.3} ms  cache_hit={hit:>5.1}%",
         if prefetch { "on" } else { "off" },
@@ -104,15 +127,27 @@ where
         frame_bytes / 1024,
         capacity / 1024
     );
+    let random_frames = std::env::var_os("CATPLAY_AES_CTR_RANDOM_FRAMES").is_some();
     if let Ok(value) = std::env::var("CATPLAY_AES_CTR_PREFETCH_PROFILE_CADENCE_MS") {
         let cadence_ms = value
             .parse::<u64>()
             .expect("profile cadence must be an integer");
-        assert!(matches!(cadence_ms, 16 | 33), "profile cadence must be 16 or 33 ms");
-        set_preference(true);
-        println!("profile_path=prefetch-consumer keystream_only=on cadence={cadence_ms} ms");
-        let outcome = run::<B>(true, Duration::from_millis(cadence_ms), frame_bytes, capacity, frames);
-        print_result(true, true, cadence_ms, &outcome);
+        assert!(cadence_ms > 0, "profile cadence must be positive");
+        let prefer_keystream = std::env::var("CATPLAY_AES_CTR_PREFETCH_PROFILE_KEYSTREAM_ONLY").map_or(true, |value| value != "0");
+        set_preference(prefer_keystream);
+        println!(
+            "profile_path=prefetch-consumer keystream_only={} cadence={cadence_ms} ms",
+            if prefer_keystream { "on" } else { "off" }
+        );
+        let outcome = run::<B>(
+            true,
+            Duration::from_millis(cadence_ms),
+            frame_bytes,
+            capacity,
+            frames,
+            random_frames,
+        );
+        print_result(true, prefer_keystream, cadence_ms, &outcome);
         return;
     }
 
@@ -123,8 +158,8 @@ where
         let mut reference_output = None;
         for prefer_keystream_generation in preferences {
             set_preference(prefer_keystream_generation);
-            let direct = run::<B>(false, cadence, frame_bytes, capacity, frames);
-            let prefetched = run::<B>(true, cadence, frame_bytes, capacity, frames);
+            let direct = run::<B>(false, cadence, frame_bytes, capacity, frames, random_frames);
+            let prefetched = run::<B>(true, cadence, frame_bytes, capacity, frames, random_frames);
             assert_eq!(
                 direct.last_frame, prefetched.last_frame,
                 "direct/prefetch CTR output differs at {cadence_ms} ms cadence with keystream generation preference={prefer_keystream_generation}"

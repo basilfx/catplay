@@ -453,6 +453,34 @@ impl Aes128CtrKernelStream {
     }
 }
 
+/// Whether the running device is one of the firmware DT compatibles
+/// validated for the AF_ALG AES-CTR backend.
+pub(crate) fn device_tree_allows_af_alg() -> bool {
+    #[cfg(feature = "std")]
+    {
+        const ALLOWED: &[&[u8]] = &[b"allwinner,v851s", b"allwinner,v821b", b"allwinner,v821", b"ingenic,x1600"];
+        const PATHS: &[&[u8]] = &[b"/proc/device-tree/compatible\0", b"/sys/firmware/devicetree/base/compatible\0"];
+
+        for path in PATHS {
+            let fd = unsafe { libc::open(path.as_ptr().cast(), libc::O_RDONLY | libc::O_CLOEXEC) };
+            if fd >= 0 {
+                let mut compatibles = [0u8; 512];
+                let len = unsafe { libc::read(fd, compatibles.as_mut_ptr().cast(), compatibles.len()) };
+                unsafe { libc::close(fd) };
+                if len > 0
+                    && compatibles[..len as usize]
+                        .split(|byte| *byte == 0)
+                        .any(|item| ALLOWED.contains(&item))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
 fn iv_add_be128(iv: [u8; 16], block_index: u128) -> [u8; 16] {
     u128::from_be_bytes(iv)
         .wrapping_add(block_index)
