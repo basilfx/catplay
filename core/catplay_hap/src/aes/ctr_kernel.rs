@@ -500,7 +500,10 @@ fn copy_cstr_bytes(dst: &mut [u8], src: &[u8]) -> Result<()> {
 fn afalg_zero_copy_chunk_len() -> usize {
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     let page_size = if page_size > 0 { page_size as usize } else { 4096 };
-    let len = page_size.saturating_mul(AFALG_ZERO_COPY_PAGES);
+    // vmsplice needs one extra pipe slot when the source starts mid-page.
+    // Leave that slot free so a partial pipe fill cannot end an AES request
+    // at a non-block boundary (e.g. 65536 - page_offset bytes).
+    let len = page_size.saturating_mul(AFALG_ZERO_COPY_PAGES - 1);
 
     (len / AES_BLOCK * AES_BLOCK).max(AES_BLOCK)
 }
