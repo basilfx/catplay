@@ -1,4 +1,6 @@
 #![allow(clippy::useless_conversion)]
+use alloc::vec;
+use alloc::vec::Vec;
 use core::mem;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -327,6 +329,7 @@ impl AfAlgCtrAes128 {
 
         let mut byte_offset = 0usize;
         let mut remaining = data;
+        let mut output_staging: Option<Vec<u8>> = None;
 
         while !remaining.is_empty() {
             let remaining_before = remaining.len();
@@ -335,7 +338,20 @@ impl AfAlgCtrAes128 {
             let sent = self.send_once_wait_writable(&chunk_iv, remaining)?;
 
             let (sent_data, rest) = remaining.split_at_mut(sent);
-            read_exact_fd(self.op_fd.as_raw_fd(), sent_data)?;
+
+            if sent_data.as_ptr().addr() % 4 == 0 {
+                read_exact_fd(self.op_fd.as_raw_fd(), sent_data)?;
+            } else {
+                // A vmspliced buffer starting mid-word gives AF_ALG a first SG entry
+                // whose length is not divisible by four. V821's DMA cannot accept it.
+                // Prefer memcpy to an allocated staging buffer instead of a slower PIO fallback.
+                
+                let storage = output_staging.get_or_insert_with(|| vec![0u8; self.splice_chunk + 3]);
+                let aligned = storage.as_ptr().align_offset(4);
+                let output = &mut storage[aligned..aligned + sent];
+                read_exact_fd(self.op_fd.as_raw_fd(), output)?;
+                sent_data.copy_from_slice(output);
+            }
             byte_offset = byte_offset
                 .checked_add(sent)
                 .expect("AES-CTR byte offset overflow");
@@ -362,7 +378,12 @@ impl AfAlgCtrAes128 {
     }
 
     fn send_once_wait_writable(&mut self, iv: &[u8; 16], data: &[u8]) -> Result<usize> {
-        if let (Some(pipe_rd), Some(pipe_wr)) = (&self.pipe_rd, &self.pipe_wr) {
+        // A vmspliced buffer starting mid-word gives AF_ALG a first SG entry
+        // whose length is not divisible by four. V821's DMA cannot accept it.
+        // sendmsg copies that input into full kernel pages instead.
+        if data.as_ptr().addr() % 4 == 0
+            && let (Some(pipe_rd), Some(pipe_wr)) = (&self.pipe_rd, &self.pipe_wr)
+        {
             loop {
                 match unsafe {
                     send_afalg_skcipher_request_splice_once(
@@ -381,7 +402,8 @@ impl AfAlgCtrAes128 {
         }
 
         loop {
-            match unsafe { send_afalg_skcipher_request_vectored_once(self.op_fd.as_raw_fd(), iv, &[data]) } {
+            let chunk = &data[..data.len().min(self.splice_chunk)];
+            match unsafe { send_afalg_skcipher_request_vectored_once(self.op_fd.as_raw_fd(), iv, &[chunk]) } {
                 Err(AfAlgError::Sys(errno)) if would_block(errno) => wait_fd(self.op_fd.as_raw_fd(), FdInterest::Write)?,
                 result => return result,
             }
