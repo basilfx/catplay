@@ -1,6 +1,8 @@
 //! Shared XOR for cached AES and ChaCha keystreams.
 
-#[cfg(not(target_arch = "mips"))]
+// Keep the generic byte loop for other targets: it has been tested to produce
+// optimally vectorized code for ARMv7 NEON.
+#[cfg(not(any(target_arch = "mips", target_arch = "riscv32")))]
 pub(crate) fn xor(dst: &mut [u8], keystream: &[u8]) {
     debug_assert_eq!(dst.len(), keystream.len());
     for (byte, key) in dst.iter_mut().zip(keystream) {
@@ -8,25 +10,52 @@ pub(crate) fn xor(dst: &mut [u8], keystream: &[u8]) {
     }
 }
 
-// MIPS32 lowers unaligned u32 accesses to lwl/lwr and swl/swr, avoiding a
-// loop per byte even at opt-level="s". On RISC-V32 these accesses instead
-// expand to byte loads/stores plus shifts, so retain the simple loop there.
-#[cfg(target_arch = "mips")]
+#[cfg(any(target_arch = "mips", target_arch = "riscv32"))]
+#[inline(always)]
+fn xor_word(dst: &mut u32, src: *const u8) {
+    // SAFETY: Caller guarantees at least 4 readable bytes.
+    let key = unsafe { src.cast::<u32>().read_unaligned() };
+    *dst ^= key;
+}
+
+#[cfg(any(target_arch = "mips", target_arch = "riscv32"))]
 pub(crate) fn xor(dst: &mut [u8], keystream: &[u8]) {
     debug_assert_eq!(dst.len(), keystream.len());
-    let mut dst_words = dst.chunks_exact_mut(4);
-    let mut key_words = keystream.chunks_exact(4);
-    for (dst, src) in dst_words.by_ref().zip(key_words.by_ref()) {
-        let lhs = u32::from_ne_bytes((&*dst).try_into().unwrap());
-        let rhs = u32::from_ne_bytes(src.try_into().unwrap());
-        dst.copy_from_slice(&(lhs ^ rhs).to_ne_bytes());
+
+    // SAFETY: u32 accepts every bit pattern.
+    let (head, words, tail) = unsafe { dst.align_to_mut::<u32>() };
+
+    let (key_head, rest) = keystream.split_at(head.len());
+    let (key_body, key_tail) = rest.split_at(words.len() * 4);
+
+    for (d, k) in head.iter_mut().zip(key_head) {
+        *d ^= *k;
     }
-    for (dst, src) in dst_words
-        .into_remainder()
-        .iter_mut()
-        .zip(key_words.remainder())
-    {
-        *dst ^= src;
+
+    let mut chunks = words.chunks_exact_mut(8);
+    let mut key_ptr = key_body.as_ptr();
+
+    for chunk in chunks.by_ref() {
+        xor_word(&mut chunk[0], key_ptr);
+        xor_word(&mut chunk[1], unsafe { key_ptr.add(4) });
+        xor_word(&mut chunk[2], unsafe { key_ptr.add(8) });
+        xor_word(&mut chunk[3], unsafe { key_ptr.add(12) });
+        xor_word(&mut chunk[4], unsafe { key_ptr.add(16) });
+        xor_word(&mut chunk[5], unsafe { key_ptr.add(20) });
+        xor_word(&mut chunk[6], unsafe { key_ptr.add(24) });
+        xor_word(&mut chunk[7], unsafe { key_ptr.add(28) });
+
+        // SAFETY: Stays within key_body or one-past-the-end.
+        key_ptr = unsafe { key_ptr.add(32) };
+    }
+
+    for word in chunks.into_remainder() {
+        xor_word(word, key_ptr);
+        key_ptr = unsafe { key_ptr.add(4) };
+    }
+
+    for (d, k) in tail.iter_mut().zip(key_tail) {
+        *d ^= *k;
     }
 }
 
