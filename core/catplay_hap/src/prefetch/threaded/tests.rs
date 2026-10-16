@@ -50,7 +50,7 @@ fn blocked() -> (BlockingProvider, Arc<Barrier>, Arc<Barrier>) {
     )
 }
 
-fn wait_for(prefetch: &KeystreamPrefetch<BlockingProvider>, available: usize) {
+fn wait_for<P: KeystreamProvider>(prefetch: &KeystreamPrefetch<P>, available: usize) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while prefetch.status().available_bytes != available {
         assert!(Instant::now() < deadline, "prefetch did not fill");
@@ -72,6 +72,46 @@ fn formatting_calculates_hit_and_drop_rates() {
     assert!(text.contains("cache_hit=75.0%"));
     assert!(text.contains("drop=20.0%"));
     assert!(text.contains("consumed=80"));
+}
+
+#[test]
+fn worker_exposes_only_keystream_from_a_64_byte_aligned_chunk() {
+    #[derive(Clone)]
+    struct AlignedProvider(Arc<AtomicBool>);
+
+    impl KeystreamProvider for AlignedProvider {
+        type Error = core::convert::Infallible;
+
+        fn generate_keystream(&mut self, _: u64, offset: u128, out: &mut [u8]) -> Result<(), Self::Error> {
+            self.0
+                .store(out.as_ptr().addr() % 64 == 0, Ordering::SeqCst);
+            for (index, byte) in out.iter_mut().enumerate() {
+                *byte = (offset as usize + index) as u8;
+            }
+            Ok(())
+        }
+
+        fn apply_keystream(&mut self, _: u64, _: u128, _: &mut [u8]) -> Result<(), Self::Error> {
+            unreachable!("all test bytes should come from prefetch")
+        }
+    }
+
+    let aligned = Arc::new(AtomicBool::new(false));
+    let mut prefetch = KeystreamPrefetch::new(
+        AlignedProvider(Arc::clone(&aligned)),
+        0,
+        Schedule::Continuous { capacity: 33 },
+        0,
+        "aligned-prefetch",
+        64,
+    );
+    prefetch.start_worker().unwrap();
+    wait_for(&prefetch, 33);
+    assert!(aligned.load(Ordering::SeqCst));
+
+    let mut data = [0u8; 33];
+    assert_eq!(prefetch.apply_next(&mut data).unwrap().cached_bytes, 33);
+    assert_eq!(data, core::array::from_fn(|index| index as u8));
 }
 
 #[test]

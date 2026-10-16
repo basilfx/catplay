@@ -131,7 +131,7 @@ impl<P: KeystreamProvider> KeystreamPrefetch<P> {
                         break;
                     }
                     let len = (chunk_end - cursor).min(end - cursor) as usize;
-                    cached.push((Arc::clone(&chunk.bytes), (cursor - chunk.position) as usize, len));
+                    cached.push((chunk.bytes.clone(), (cursor - chunk.position) as usize, len));
                     cursor += len as u128;
                     if cursor == chunk_end {
                         state.chunks.pop_front();
@@ -174,7 +174,9 @@ impl<P: KeystreamProvider> KeystreamPrefetch<P> {
         }
         let mut at = 0;
         for (bytes, from, len) in cached {
-            xor(&mut data[at..at + len], &bytes[from..from + len]);
+            // The worker publishes a chunk only after the provider succeeds.
+            let keystream = unsafe { bytes.as_slice_unchecked() };
+            xor(&mut data[at..at + len], &keystream[from..from + len]);
             at += len;
         }
         if tracked {

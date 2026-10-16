@@ -1,6 +1,6 @@
 use super::state::{Job, State};
 use super::std;
-use super::wake::{Chunk, PollWorker, Wake};
+use super::wake::{AlignedChunk, Chunk, PollWorker, Wake};
 use crate::prefetch::{KeystreamProvider, Schedule};
 use std::sync::Arc;
 
@@ -67,13 +67,19 @@ impl<P: KeystreamProvider> PollWorker for CoreWorker<P> {
             self.provider = Some(provider);
             self.active_generation = job.generation;
         }
-        // Allocate the final shared cache chunk uninitialized. KeystreamProvider
-        // promises to write every output byte, so zero-filling a temporary Vec
-        // first would be wasted work and converting Vec -> Arc<[u8]> would copy
-        // the entire chunk into a second allocation.
-        let mut bytes = Arc::<[u8]>::new_uninit_slice(job.len);
-        let output = Arc::get_mut(&mut bytes).expect("new Arc allocation must be unique");
-        let output = unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<u8>(), output.len()) };
+        // The provider needs an aligned output address. AlignedChunk shares
+        // this Arc without copying and hides the padding from consumers.
+        let storage_len = job
+            .len
+            .checked_add(64)
+            .expect("prefetch chunk size overflow");
+        let mut storage = Arc::<[u8]>::new_uninit_slice(storage_len);
+        let allocation = Arc::get_mut(&mut storage).expect("new Arc allocation must be unique");
+        let start = allocation.as_ptr().align_offset(64);
+        let aligned = &mut allocation[start..start + job.len];
+        // The provider contract requires a complete overwrite on success.
+        // Keep both output and padding uninitialized until that write.
+        let output = unsafe { core::slice::from_raw_parts_mut(aligned.as_mut_ptr().cast::<u8>(), aligned.len()) };
         let result = self
             .provider
             .as_mut()
@@ -92,9 +98,9 @@ impl<P: KeystreamProvider> PollWorker for CoreWorker<P> {
             self.provider = None;
             return false;
         }
-        // `generate_keystream` succeeded and guarantees that it initialized the
-        // full output slice above.
-        let bytes = unsafe { bytes.assume_init() };
+        // The provider initialized exactly this range; padding need not be
+        // initialized because AlignedChunk never exposes it as u8.
+        let bytes = unsafe { AlignedChunk::from_initialized(storage, start, job.len) };
         state.cycle.generated_bytes += job.len;
         state.generated_position = job.offset + job.len as u128;
         let useful_start = job.offset.max(state.consumed);

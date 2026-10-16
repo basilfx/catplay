@@ -1,9 +1,36 @@
 use super::std;
+use core::mem::MaybeUninit;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
+#[derive(Clone)]
+pub(super) struct AlignedChunk {
+    storage: Arc<[MaybeUninit<u8>]>,
+    start: usize,
+    len: usize,
+}
+
+impl AlignedChunk {
+    /// # Safety
+    /// `storage[start..start + len]` must be fully initialized.
+    pub(super) unsafe fn from_initialized(storage: Arc<[MaybeUninit<u8>]>, start: usize, len: usize) -> Self {
+        assert!(start <= storage.len() && len <= storage.len() - start);
+        Self { storage, start, len }
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.len
+    }
+
+    /// # Safety
+    /// The provider must have initialized every byte in the visible range.
+    pub(super) unsafe fn as_slice_unchecked(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.storage.as_ptr().add(self.start).cast::<u8>(), self.len) }
+    }
+}
+
 pub(super) struct Chunk {
-    pub bytes: Arc<[u8]>,
+    pub bytes: AlignedChunk,
     pub position: u128,
 }
 
