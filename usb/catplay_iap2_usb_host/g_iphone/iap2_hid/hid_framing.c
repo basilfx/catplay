@@ -116,7 +116,8 @@ int hid_report_encode(const u16 sizes[256], const u8 *data, size_t len,
 int hid_report_decode(const u16 sizes[256], bool *continuing,
                       const u8 *report, size_t len, struct hid_fragment *fragment)
 {
-    if (!len || !sizes[report[0]] || sizes[report[0]] != len || len < 3 ||
+    /* Removed stricter checks because of MBUX spec violations */
+    if (!len || /* !sizes[report[0]] || sizes[report[0]] != len || */ len < 3 ||
         (report[1] & ~3) || ((report[1] & 1) && !*continuing)) {
         *continuing = false;
         return -EPROTO;

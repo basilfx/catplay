@@ -132,13 +132,17 @@ int iap2_hid_set_report(struct iap2_hid *hid, u8 report_type, u8 report_id,
         ret = -EOPNOTSUPP;
     if (!ret && len > hid->max_output_report_len)
         ret = -EMSGSIZE;
-    if (!ret && (!len || !data ||
-        ((const u8 *)data)[0] != report_id || !hid->reports.output[report_id]))
+    if (!ret && (!len || !data))
         ret = -EPROTO;
-    if (!ret && len != hid->reports.output[report_id]) {
+    if (!ret && ((const u8 *)data)[0] != report_id || !hid->reports.output[report_id]) {
         /* Violated by MBUX... */
+        pr_info("iPhone iAP2-HID layer: accepting HID spec violation: first byte is not the report id");
+        /* ret = -EPROTO; */
+    }
+    if (!ret && len != hid->reports.output[report_id]) {
+        /* Also violated by MBUX... */
         pr_info("iPhone iAP2-HID layer: accepting HID spec violation: request length does not match descriptor");
-        /* ret = -EPROTO */
+        /* ret = -EPROTO; */
     }
     if (!ret && len && !data)
         ret = -EINVAL;
