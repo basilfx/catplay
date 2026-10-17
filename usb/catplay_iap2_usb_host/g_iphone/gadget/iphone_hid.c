@@ -209,9 +209,15 @@ int iphone_hid_setup(struct iphone_hid *hid, const struct usb_ctrlrequest *ctrl)
         switch (ctrl->bRequest) {
         case HID_REQ_SET_REPORT:
             pr_info("iPhone: HID_REQ_SET_REPORT");
-            if ((value >> 8) != 2 || !hid->reports.output[id] ||
-                len != hid->reports.output[id])
+            if ((value >> 8) != 2 || !hid->reports.output[id]) {
+                pr_info("iPhone: rejecting invalid HID report");
                 goto out;
+            }
+            /* Violated by MBUX... */
+            if (len != hid->reports.output[id]) {
+                pr_info("iPhone: accepting HID spec violation: request length does not match descriptor");
+            }
+
             hid->output_id = id;
             req->length = len;
             break;
