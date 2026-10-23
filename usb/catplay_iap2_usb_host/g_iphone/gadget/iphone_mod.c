@@ -46,6 +46,16 @@ static int __init iphone_init(void)
             }
         }
 
+        if (rs_name && rs_name[0]) {
+            ret = iphone_set_rs_name(iphone, rs_name);
+            if (ret) {
+                pr_err("iPhone: failed to override role switch: %d\n", ret);
+                iphone_put_device(iphone);
+                iphone_class_unregister();
+                return ret;
+            }
+        }
+
         ret = iphone_bind(iphone);
         if (ret) {
             pr_err("iPhone: failed to bind default device: %d\n", ret);

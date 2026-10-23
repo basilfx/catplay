@@ -10,6 +10,10 @@ static char *udc_name;
 module_param(udc_name, charp, 0);
 MODULE_PARM_DESC(udc_name, "Name of UDC to bind to");
 
+static char *rs_name;
+module_param(rs_name, charp, 0);
+MODULE_PARM_DESC(rs_name, "Role switch name override (without -role-switch suffix)");
+
 static char *device_name;
 module_param(device_name, charp, 0);
 MODULE_PARM_DESC(device_name, "Name of default iPhone device to create on module load");

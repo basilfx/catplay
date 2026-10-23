@@ -13,8 +13,14 @@ struct iphone_rs_sysfs {
 	enum usb_role cached_role;
 };
 
-static const char *iphone_rs_sysfs_name(const char *udc_name)
+static const char *iphone_rs_sysfs_name(const char *udc_name,
+					const char *rs_name)
 {
+	if (rs_name && rs_name[0])
+		return rs_name;
+	if (!udc_name || !udc_name[0])
+		return NULL;
+
 	if (!strcmp(udc_name, "2184200.usb"))
 		return "ci_hdrc.1";
 	/* V821 exposes MUSB through a child UDC of the USB glue device. */
@@ -69,19 +75,20 @@ static const struct iphone_rs_ops iphone_rs_sysfs_ops = {
 	.set_role = iphone_rs_sysfs_set_role,
 };
 
-struct iphone_rs *iphone_rs_sysfs_create(const char *udc_name)
+struct iphone_rs *iphone_rs_sysfs_create(const char *udc_name, const char *rs_name)
 {
 	struct iphone_rs_sysfs *sysfs;
+	const char *name = iphone_rs_sysfs_name(udc_name, rs_name);
 	int len;
 
-	if (!udc_name || !udc_name[0] || !current->fs)
+	if (!name || !current->fs)
 		return ERR_PTR(-ENODEV);
 	sysfs = kzalloc(sizeof(*sysfs), GFP_KERNEL);
 	if (!sysfs)
 		return ERR_PTR(-ENOMEM);
 	len = snprintf(sysfs->role_path, sizeof(sysfs->role_path),
 		       "/sys/class/usb_role/%s-role-switch/role",
-		       iphone_rs_sysfs_name(udc_name));
+		       name);
 	if (len < 0 || len >= sizeof(sysfs->role_path)) {
 		kfree(sysfs);
 		return ERR_PTR(-ENAMETOOLONG);

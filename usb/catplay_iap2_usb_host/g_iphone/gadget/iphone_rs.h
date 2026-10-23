@@ -19,7 +19,9 @@ static inline int iphone_rs_set_role(struct iphone_rs *rs, enum usb_role role)
 	return rs->ops->set_role(rs, role);
 }
 
-/* Create in the caller's filesystem context; returns ERR_PTR on failure. */
-struct iphone_rs *iphone_rs_sysfs_create(const char *udc_name);
+/* Create in the caller's filesystem context; returns ERR_PTR on failure.
+ * A nonempty rs_name overrides the legacy UDC-to-role-switch mapping.
+ */
+struct iphone_rs *iphone_rs_sysfs_create(const char *udc_name, const char *rs_name);
 /* Paired with sysfs_create; accepts NULL. All set_role calls must be joined. */
 void iphone_rs_sysfs_destroy(struct iphone_rs *rs);

@@ -275,7 +275,8 @@ int iphone_bind(struct device* device)
 
 	struct iphone_dev_data *iphone = iphone_dev_alloc(device,
 							  data->udc[0] ? data->udc : NULL,
-							  data->serial);
+							  data->serial,
+							  data->rs_name);
 	if (IS_ERR(iphone)) {
 		ret = PTR_ERR(iphone);
 		goto fail;
@@ -506,6 +507,27 @@ int iphone_set_udc(struct device* device, char* udc) {
 	return 0;
 
 fail:
+	device_unlock(device);
+	return ret;
+}
+
+int iphone_set_rs_name(struct device *device, const char *rs_name)
+{
+	struct iphone_dev *data;
+	int ret = -ENODEV;
+
+	device_lock(device);
+	data = dev_get_drvdata(device);
+	if (!data)
+		goto out;
+	if (data->iphone) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	ret = strscpy(data->rs_name, rs_name, sizeof(data->rs_name));
+	ret = ret < 0 ? -E2BIG : 0;
+out:
 	device_unlock(device);
 	return ret;
 }

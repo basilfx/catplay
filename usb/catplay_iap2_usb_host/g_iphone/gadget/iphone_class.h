@@ -10,6 +10,7 @@ struct iphone_dev {
 
 	/* bind config */
 	char udc[64];
+	char rs_name[128];
 	char serial[41];
 };
 
@@ -35,6 +36,7 @@ int iphone_get_udc(struct device* device, char* out, int size);
 
 int iphone_set_serial(struct device* device, char* serial);
 int iphone_set_udc(struct device* device, char* udc);
+int iphone_set_rs_name(struct device *device, const char *rs_name);
 
 
 

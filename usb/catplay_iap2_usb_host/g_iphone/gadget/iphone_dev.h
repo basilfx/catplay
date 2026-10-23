@@ -66,5 +66,6 @@ struct iphone_dev_driver { /* container_of: usb_composite_driver */
 	struct iphone_dev_data *data;
 };
 
-struct iphone_dev_data *iphone_dev_alloc(struct device *owner_dev, char *udc_name, char* serial);
+struct iphone_dev_data *iphone_dev_alloc(struct device *owner_dev, char *udc_name,
+					char *serial, const char *rs_name);
 int iphone_dev_free(struct iphone_dev_data *data);

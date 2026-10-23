@@ -501,7 +501,8 @@ static void iphone_dev_initial_bind_workfn(struct work_struct *work)
 		iphone_dev_disable_runtime(bind->data);
 }
 
-struct iphone_dev_data *iphone_dev_alloc(struct device *owner_dev, char *udc_name, char* serial)
+struct iphone_dev_data *iphone_dev_alloc(struct device *owner_dev, char *udc_name,
+					char *serial, const char *rs_name)
 {
 	int ret = -ENOMEM;
 	struct iphone_dev_data *data = NULL;
@@ -589,7 +590,7 @@ struct iphone_dev_data *iphone_dev_alloc(struct device *owner_dev, char *udc_nam
 
 	data->driver_registered = false;
 	data->gadget_registered = false;
-	data->rs = iphone_rs_sysfs_create(udc_name);
+	data->rs = iphone_rs_sysfs_create(udc_name, rs_name);
 	if (IS_ERR(data->rs)) {
 		ret = PTR_ERR(data->rs);
 		data->rs = NULL;
