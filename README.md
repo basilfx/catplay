@@ -36,11 +36,11 @@ As a result of heavy R&D, from the first public release it already offers unmatc
 |-------------|--------------|-----|-------|-----------|--------|--------------|
 | ✅ Stable | Carlinkit Mini Ultra 1<br>Wooboobox M5<br>Wooboobox M6<br>Wooboobox M11 | Ingenic X1600 | AIC8800D80 | AX1800M | [clk-mini-ultra-nor.zip](https://github.com/catplay-labs/catplay/releases/latest/download/clk-mini-ultra-nor.zip) | [Carlinkit Mini Ultra.md](https://github.com/catplay-labs/catplay-firmware/blob/master/docs/Carlinkit%20Mini%20Ultra.md) |
 | ✅ Stable | Carlinkit Mini Ultra 1<br>Wooboobox B12<br>EKIY EC03 | Allwinner V821B | RTL8733BS | ly5190<br>ly5166<br>ly5101 | [v821b-rtl8733bs.zip](https://github.com/catplay-labs/catplay/releases/latest/download/v821b-rtl8733bs.zip) | [V821.md](https://github.com/catplay-labs/catplay-firmware/blob/master/docs/V821.md) |
-| 🛠️ In progress | Carlinkit Mini Ultra 3<br>Carlinkit CCPA-2CAir | Allwinner V821B | AIC8800D80 | - | - | - |
+| ✅ Beta | Wooboobox T2 | Allwinner V851S | AIC8800D80 | V851S | [v851s3-aic8800d80.zip](https://github.com/catplay-labs/catplay/releases/latest/download/v851s3-aic8800d80.zip) | [V851S.md](https://github.com/catplay-labs/catplay-firmware/blob/master/docs/V851S.md) |
+| 🛠️ In progress | Carlinkit Mini Ultra 3<br>Carlinkit CCPA-C2Air | Allwinner V821B | AIC8800D80 | - | - | - |
 | 🛠️ In progress | Carlinkit Mini Ultra 1 | Anyka AN3918AV130 | AIC8800D80 | - | - | - |
-| 🛠️ In progress | Wooboobox T2 | Allwinner V851S | AIC8800D80 | - | - | - |
 | ⏳ Port in queue | Carlinkit 3.0/4.0/5.0 | IMX6ULL | - | - | - | - |
-| ⏳ Port in queue | Carlinkit CCPA-2CAir | Axera AX520 | AIC8800D80 | - | - | - |
+| ⏳ Port in queue | Carlinkit CCPA-C2Air | Axera AX520 | AIC8800D80 | - | - | - |
 
 Not sure which to flash?  
 Future releases will ship a script which can ID your dongle.    
@@ -56,7 +56,7 @@ The reasons for this have _mostly_ been mapped, however fixing them requires som
 |------------------------|---------------------|----------------------|------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------|
 | Mercedes W213          | NTG5.5              | Windows Embedded (?) | Yes        | None                                                                                                                                                                                                                                                                                                                              | 280.33.12.1 |
 | SEAT Leon 5F (2019)    | TechniSat MIB2/MST2 | QNX                  | Yes        | None                                                                                                                                                                                                                                                                                                                              | 210.81      |
-| Audi/Porsche ~2020 era | HARMAN MIB2/MHI2    | QNX                  | No         | - car resets power to the dongle<br>after role switch; pending verification if<br>other dongles bypass this and if it's related to current iAP2<br>logic. otherwise it works fine with externally injected power.<br>- some fixes to support CarPlay 210.81 were made but are pending<br>verification with live access to the car | 210.81      |
+| Audi/Porsche ~2020 era | HARMAN MIB2/MHI2    | QNX                  | Yes         | - audio proxy is incompatible and overflows car's audio buffer; fixes pending | 210.81      |
 |                        |                     |                      |            |                                                                                                                                                                           
 
 ## iOS compatibility
