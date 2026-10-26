@@ -28,15 +28,19 @@ impl OverlayPolicyDefault {
                 Ok(()) => {
                     if let Err(err) = mgr.set_discoverable("hci0", true).await {
                         warn!("Failed to set BlueZ adapter discoverable: {err}");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
                     }
                     if let Err(err) = mgr.set_pairable("hci0", true).await {
                         warn!("Failed to set BlueZ adapter pairable: {err}");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
                     }
                     return mgr;
                 }
                 Err(err) => {
                     debug!("BlueZ agent not available: {err}");
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
         }
