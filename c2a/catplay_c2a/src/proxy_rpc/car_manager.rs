@@ -5,7 +5,7 @@ use catplay_carplay::{
     clock::{MediaClockBox, NtpU64},
     events::CommandPending,
     modes::{ChangeModesResponse, ResourceTransferPriority},
-    msg::{Command, CommandType, InfoMessageResponse},
+    msg::{Command, CommandType, ControllerFeature, InfoMessageResponse},
     rtsp_frame::{HttpStatus, RtspError, RtspResponse, RtspResult},
     screen::tx::ScreenTransmitProxy,
     video::Pts,
@@ -25,7 +25,9 @@ use std::{
 
 use crate::{
     audiov2::AudioProxyUtil,
-    proxy_rpc::{ModesArbiter, TxAdapterOp, car_to_iphone_command_task::CarToIphoneCommandTask, overlay_manager::OverlayManager},
+    proxy_rpc::{
+        AltScreenManager, ModesArbiter, TxAdapterOp, car_to_iphone_command_task::CarToIphoneCommandTask, overlay_manager::OverlayManager,
+    },
 };
 
 pub struct CarManager {
@@ -35,11 +37,14 @@ pub struct CarManager {
     car_media_clock: MediaClockBox,
 
     iphone_peer: Option<IphonePeer>,
+    /// Controller features enabled for the current iPhone session.
+    iphone_features: Vec<ControllerFeature>,
     cmd_next: Option<CommandPending>,
 
     tx_closed: Option<AirPlayTransmitterSessionError>,
 
     overlay: OverlayManager,
+    alt_screen: AltScreenManager,
 
     modes: ModesArbiter,
     initial_screen_steal_attempted: bool,
@@ -96,8 +101,10 @@ impl CarManager {
             car_media_clock,
             car_had_record: false,
             iphone_peer: None,
+            iphone_features: Default::default(),
             cmd_next: None,
             overlay,
+            alt_screen: Default::default(),
             tx_closed: None,
 
             tx_queue: Default::default(),
@@ -167,6 +174,7 @@ impl CarManager {
 
         event_select!(
             self.overlay,
+            self.alt_screen,
             self.proxy_rx,
             self.pending_screen_setup,
             filling_slot(&mut self.cmd_next, tx.pop_command()),
@@ -260,6 +268,10 @@ impl CarManager {
 
         self.overlay.reconcile().await;
 
+        if let Some(screen) = self.alt_screen.reconcile().await {
+            self.schedule_alt_screen_teardown(screen);
+        }
+
         Ok(())
     }
 
@@ -319,6 +331,43 @@ impl CarManager {
         }
     }
 
+    fn schedule_alt_screen_setup(&mut self, uuid: Option<String>) {
+        info!("Scheduling alt screen SETUP for display {uuid:?}");
+
+        let tx = self.car_state.clone();
+        let (otx, orx) = oneshot::channel();
+        self.alt_screen.set_pending_setup(orx);
+
+        self.tx_queue.push_back(
+            async move {
+                warn!("Alt screen SETUP start");
+                match tx.setup_alt_screen(Duration::from_millis(25), uuid).await {
+                    Ok(screen) => {
+                        warn!("Alt screen SETUP end");
+                        let _ = otx.send(screen);
+                    }
+                    // Not critical to session's sanity, the main screen continues to work without the alt screen
+                    Err(err) => error!("Car failed alt screen SETUP: {err}"),
+                }
+                Ok(())
+            }
+            .boxed(),
+        );
+    }
+
+    fn schedule_alt_screen_teardown(&mut self, screen: TeardownGuard<ScreenTransmitProxy>) {
+        info!("Scheduling alt screen TEARDOWN");
+
+        let tx = self.car_state.clone();
+        self.tx_queue.push_back(
+            async move {
+                drop(screen);
+                tx.drain_teardown_queue().await
+            }
+            .boxed(),
+        );
+    }
+
     fn sanity_error(&mut self, error: CarManagerError) {
         if self.error.is_none() {
             self.error.replace(error);
@@ -336,6 +385,16 @@ impl CarManager {
             TxAdapterOp::ScreenChannel { channel } => {
                 debug!("iPhone: screen");
                 self.overlay.set_iphone_peer_screen(Some(channel));
+            }
+            TxAdapterOp::AltScreenChannel { channel, uuid } => {
+                debug!("iPhone: alt screen");
+                if let Some(screen) = self.alt_screen.set_iphone_screen(channel, uuid.clone()) {
+                    self.schedule_alt_screen_teardown(screen);
+                }
+                self.schedule_alt_screen_setup(uuid);
+            }
+            TxAdapterOp::NegotiateFeatures { offered, enabled } => {
+                let _ = enabled.send(self.on_negotiate_features(&offered));
             }
             TxAdapterOp::Modes { modes, .. } => {
                 warn!("Peer modes updated: {modes:?}");
@@ -379,7 +438,23 @@ impl CarManager {
             car_to_iphone_proxy: Default::default(),
             iphone: handle.clone(),
         });
+        self.iphone_features.clear();
         self.overlay.set_iphone_peer(Some(handle.clone()));
+    }
+
+    pub fn on_negotiate_features(&mut self, offered: &[ControllerFeature]) -> Vec<ControllerFeature> {
+        // These features are proxied as-is, so they can only be enabled if the car has enabled them too.
+        const PROXIED_FEATURES: [ControllerFeature; 2] = [ControllerFeature::AltScreen, ControllerFeature::ViewAreas];
+
+        let car_features = self.car_state.enabled_features();
+        let enabled: Vec<_> = PROXIED_FEATURES
+            .into_iter()
+            .filter(|feature| offered.contains(feature) && car_features.contains(feature))
+            .collect();
+
+        info!("Controller features enabled by the car: {car_features:?}, offered by iPhone: {offered:?}, enabled: {enabled:?}");
+        self.iphone_features = enabled.clone();
+        enabled
     }
 
     pub fn on_peer_disconnect(&mut self) {
@@ -397,6 +472,10 @@ impl CarManager {
         }
         self.overlay.set_iphone_peer_screen(None);
         self.overlay.set_iphone_peer(None);
+
+        if let Some(screen) = self.alt_screen.reset() {
+            self.schedule_alt_screen_teardown(screen);
+        }
     }
 
     pub fn on_patch_info(&mut self, info: &mut InfoMessageResponse) {
@@ -411,8 +490,23 @@ impl CarManager {
             // Use cached info; protocol says /info could be called more than once, but that never happens in practice.
             let info_clone = info.clone();
 
+            let mut displays = other.displays;
+            let mut hid_devices = other.hid_devices;
+            if !self.iphone_features.contains(&ControllerFeature::AltScreen) {
+                // Without altScreen only the main display can be driven. Advertising additional displays (e.g. an instrument cluster)
+                // anyway makes the iPhone tear down the session right after RECORD.
+                //
+                // This assumes that the car lists its main display first, which holds for all head units observed so far.
+                displays.truncate(1);
+                hid_devices.retain(|hid| {
+                    displays
+                        .iter()
+                        .any(|display| display.uuid == hid.display_uuid)
+                });
+            }
+
             InfoMessageResponse {
-                hid_devices: other.hid_devices,
+                hid_devices,
                 hid_languages: other.hid_languages,
                 right_hand_drive: other.right_hand_drive,
 
@@ -426,7 +520,7 @@ impl CarManager {
 
                 manufacturer: other.manufacturer,
                 model: other.model,
-                displays: other.displays,
+                displays,
 
                 audio_latencies: other.audio_latencies,
                 features: other.features,
@@ -555,7 +649,8 @@ impl CarManager {
                 | CommandType::RequestSiri
                 | CommandType::RequestUI
                 | CommandType::SetNightMode
-                | CommandType::SetLimitedUI => ProxyType::Proxy,
+                | CommandType::SetLimitedUI
+                | CommandType::ChangeMapZoomLevel => ProxyType::Proxy,
                 // Some cars won't queue more than one HID command at a time, and waiting for iPhone's response
                 // generates too much latency.
                 CommandType::HidSendReport => ProxyType::ProxyFastAck,
