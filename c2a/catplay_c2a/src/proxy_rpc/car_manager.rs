@@ -5,7 +5,7 @@ use catplay_carplay::{
     clock::{MediaClockBox, NtpU64},
     events::CommandPending,
     modes::{ChangeModesResponse, ResourceTransferPriority},
-    msg::{Command, CommandType, ControllerFeature, InfoMessageResponse},
+    msg::{Command, CommandType, ControllerFeature, Display, HidDevice, InfoMessageResponse},
     rtsp_frame::{HttpStatus, RtspError, RtspResponse, RtspResult},
     screen::tx::ScreenTransmitProxy,
     video::Pts,
@@ -443,14 +443,8 @@ impl CarManager {
     }
 
     pub fn on_negotiate_features(&mut self, offered: &[ControllerFeature]) -> Vec<ControllerFeature> {
-        // These features are proxied as-is, so they can only be enabled if the car has enabled them too.
-        const PROXIED_FEATURES: [ControllerFeature; 2] = [ControllerFeature::AltScreen, ControllerFeature::ViewAreas];
-
         let car_features = self.car_state.enabled_features();
-        let enabled: Vec<_> = PROXIED_FEATURES
-            .into_iter()
-            .filter(|feature| offered.contains(feature) && car_features.contains(feature))
-            .collect();
+        let enabled = negotiate_proxied_features(offered, car_features);
 
         info!("Controller features enabled by the car: {car_features:?}, offered by iPhone: {offered:?}, enabled: {enabled:?}");
         self.iphone_features = enabled.clone();
@@ -495,14 +489,7 @@ impl CarManager {
             if !self.iphone_features.contains(&ControllerFeature::AltScreen) {
                 // Without altScreen only the main display can be driven. Advertising additional displays (e.g. an instrument cluster)
                 // anyway makes the iPhone tear down the session right after RECORD.
-                //
-                // This assumes that the car lists its main display first, which holds for all head units observed so far.
-                displays.truncate(1);
-                hid_devices.retain(|hid| {
-                    displays
-                        .iter()
-                        .any(|display| display.uuid == hid.display_uuid)
-                });
+                restrict_to_main_display(&mut displays, &mut hid_devices);
             }
 
             InfoMessageResponse {
@@ -729,6 +716,30 @@ impl CarManager {
     }
 }
 
+/// Returns the controller features to enable towards the iPhone.
+///
+/// These features are proxied as-is, so they can only be enabled if the iPhone has offered them and the car has enabled them too.
+fn negotiate_proxied_features(offered: &[ControllerFeature], car_enabled: &[ControllerFeature]) -> Vec<ControllerFeature> {
+    const PROXIED_FEATURES: [ControllerFeature; 2] = [ControllerFeature::AltScreen, ControllerFeature::ViewAreas];
+
+    PROXIED_FEATURES
+        .into_iter()
+        .filter(|feature| offered.contains(feature) && car_enabled.contains(feature))
+        .collect()
+}
+
+/// Keeps only the main display, and the HID devices that belong to it.
+///
+/// This assumes that the car lists its main display first, which holds for all head units observed so far.
+fn restrict_to_main_display(displays: &mut Vec<Display>, hid_devices: &mut Vec<HidDevice>) {
+    displays.truncate(1);
+    hid_devices.retain(|hid| {
+        displays
+            .iter()
+            .any(|display| display.uuid == hid.display_uuid)
+    });
+}
+
 impl Drop for CarManager {
     fn drop(&mut self) {
         // TODO ensure closed in all cases
@@ -737,5 +748,103 @@ impl Drop for CarManager {
                 .iphone
                 .close(RtspError::UnexpectedState("TX proxy is closing".into()));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MAIN_UUID: &str = "e5f7a68d-7b0f-4305-984b-974f677a150b";
+    const CLUSTER_UUID: &str = "b7e6c5a0-2222-4000-8000-000000000002";
+
+    /// Subset of the features offered by the iPhone in the logs of issue #40.
+    const IPHONE_OFFERED: [ControllerFeature; 5] = [
+        ControllerFeature::UiContext,
+        ControllerFeature::ViewAreas,
+        ControllerFeature::CornerMasks,
+        ControllerFeature::H264Level51,
+        ControllerFeature::AltScreen,
+    ];
+
+    fn display(uuid: &str) -> Display {
+        Display {
+            uuid: uuid.into(),
+            ..Default::default()
+        }
+    }
+
+    fn hid_device(name: &str, display_uuid: &str) -> HidDevice {
+        HidDevice {
+            name: name.into(),
+            display_uuid: display_uuid.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn negotiation_enables_features_offered_by_iphone_and_enabled_by_car() {
+        let car_enabled = [ControllerFeature::ViewAreas, ControllerFeature::AltScreen];
+
+        assert_eq!(
+            negotiate_proxied_features(&IPHONE_OFFERED, &car_enabled),
+            vec![ControllerFeature::AltScreen, ControllerFeature::ViewAreas]
+        );
+    }
+
+    #[test]
+    fn negotiation_does_not_enable_alt_screen_if_car_did_not_enable_it() {
+        let car_enabled = [ControllerFeature::ViewAreas];
+
+        assert_eq!(
+            negotiate_proxied_features(&IPHONE_OFFERED, &car_enabled),
+            vec![ControllerFeature::ViewAreas]
+        );
+    }
+
+    #[test]
+    fn negotiation_does_not_enable_alt_screen_if_iphone_did_not_offer_it() {
+        let offered = [ControllerFeature::UiContext, ControllerFeature::ViewAreas];
+        let car_enabled = [ControllerFeature::ViewAreas, ControllerFeature::AltScreen];
+
+        assert_eq!(
+            negotiate_proxied_features(&offered, &car_enabled),
+            vec![ControllerFeature::ViewAreas]
+        );
+    }
+
+    #[test]
+    fn negotiation_never_enables_features_that_are_not_proxied() {
+        // Both sides support these features, but CatPlay cannot proxy them as-is.
+        let both = [ControllerFeature::UiContext, ControllerFeature::H264Level51];
+
+        assert!(negotiate_proxied_features(&both, &both).is_empty());
+    }
+
+    #[test]
+    fn negotiation_enables_nothing_without_car_features() {
+        assert!(negotiate_proxied_features(&IPHONE_OFFERED, &[]).is_empty());
+    }
+
+    #[test]
+    fn restricting_drops_secondary_displays_and_their_hid_devices() {
+        let mut displays = vec![display(MAIN_UUID), display(CLUSTER_UUID)];
+        let mut hid_devices = vec![hid_device("touch", MAIN_UUID), hid_device("knob", CLUSTER_UUID)];
+
+        restrict_to_main_display(&mut displays, &mut hid_devices);
+
+        assert_eq!(displays, vec![display(MAIN_UUID)]);
+        assert_eq!(hid_devices, vec![hid_device("touch", MAIN_UUID)]);
+    }
+
+    #[test]
+    fn restricting_keeps_a_single_display_unchanged() {
+        let mut displays = vec![display(MAIN_UUID)];
+        let mut hid_devices = vec![hid_device("touch", MAIN_UUID), hid_device("knob", MAIN_UUID)];
+
+        restrict_to_main_display(&mut displays, &mut hid_devices);
+
+        assert_eq!(displays, vec![display(MAIN_UUID)]);
+        assert_eq!(hid_devices.len(), 2);
     }
 }
