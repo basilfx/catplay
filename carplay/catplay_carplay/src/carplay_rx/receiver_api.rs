@@ -85,6 +85,9 @@ pub trait AirPlayReceiverHandle: Send + Sync {
     /// Request keyframe after video decoder error (best-effort).
     fn request_keyframe(&self);
 
+    /// Request keyframe for the display identified by `uuid` (best-effort), for example the alt screen.
+    fn request_display_keyframe(&self, uuid: &str);
+
     /// Request UI to be shown. Required after screen Untake, among other things.
     fn request_ui(&self, url: &str);
 
